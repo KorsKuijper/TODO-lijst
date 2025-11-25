@@ -21,7 +21,7 @@ export const parseNaturalLanguageInput = async (
     1. Analyseer de input en haal er concrete taken uit.
     2. Bepaal een categorie.
        - Kies uit bestaande: ${existingCategoryNames.join(', ')}.
-       - Of maak nieuwe, korte categorieën (bijv. "Onderhoud", "Route", "Voeding", "Camping").
+       - Of maak nieuwe, korte categorieën (bijv. "Onderhoud", "Route", "Voeding", "Campings").
     3. Bepaal prioriteit. 'Hoog' is vaak voor mechanische mankementen of dingen die nodig zijn voor de rit van morgen.
     4. Suggesteer een lijstnaam.
        - Kies uit bestaande: ${existingListNames.join(', ')}.
