@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { Mountain, Plus, Trash2, Map, Compass, Tag, X, Tent, Bike } from 'lucide-react';
+import { Plus, Trash2, Map, Compass, X, Tent, Bike } from 'lucide-react';
 import { TodoList, Category } from '../types';
 
 interface SidebarProps {
   lists: TodoList[];
   categories: Category[];
-  activeListId: string;
+  activeView: { type: 'list' | 'category', id: string };
   onSelectList: (id: string) => void;
+  onSelectCategory: (id: string) => void;
   onAddList: (name: string) => void;
   onDeleteList: (id: string) => void;
   onAddCategory: (name: string) => void;
@@ -16,8 +17,9 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ 
   lists, 
   categories,
-  activeListId, 
+  activeView, 
   onSelectList, 
+  onSelectCategory,
   onAddList, 
   onDeleteList,
   onAddCategory,
@@ -65,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         {/* Sidebar Header Image */}
-        <div className="h-32 w-full relative">
+        <div className="h-32 w-full relative shrink-0">
             <img 
                 src="https://images.unsplash.com/photo-1541625602330-2277a4c46182?q=80&w=1974&auto=format&fit=crop"
                 className="w-full h-full object-cover opacity-90"
@@ -92,41 +94,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Jouw Ritten</h2>
           </div>
           <nav className="px-4 space-y-1 mb-8">
-            {lists.map((list) => (
-              <div 
-                key={list.id} 
-                className="group flex items-center justify-between"
-              >
-                <button
-                  onClick={() => {
-                    onSelectList(list.id);
-                    setIsOpen(false);
-                  }}
-                  className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-xl text-sm font-bold transition-all ${
-                    activeListId === list.id 
-                      ? 'bg-amber-50 text-amber-700 shadow-sm border border-amber-100' 
-                      : 'hover:bg-slate-50 text-slate-500 hover:text-slate-700 border border-transparent'
-                  }`}
+            {lists.map((list) => {
+              const isActive = activeView.type === 'list' && activeView.id === list.id;
+              return (
+                <div 
+                  key={list.id} 
+                  className="group flex items-center justify-between"
                 >
-                  <Map size={18} className={activeListId === list.id ? 'text-amber-500' : 'text-slate-400'} />
-                  <span className="truncate">{list.name}</span>
-                </button>
-                
-                {!list.isDefault && (
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if(confirm(`Avontuur "${list.name}" verwijderen?`)) {
-                        onDeleteList(list.id);
-                      }
+                    onClick={() => {
+                      onSelectList(list.id);
+                      setIsOpen(false);
                     }}
-                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 hover:text-red-500 rounded-lg transition-all absolute right-5"
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                      isActive
+                        ? 'bg-amber-50 text-amber-700 shadow-sm border border-amber-100' 
+                        : 'hover:bg-slate-50 text-slate-500 hover:text-slate-700 border border-transparent'
+                    }`}
                   >
-                    <Trash2 size={14} />
+                    <Map size={18} className={isActive ? 'text-amber-500' : 'text-slate-400'} />
+                    <span className="truncate">{list.name}</span>
                   </button>
-                )}
-              </div>
-            ))}
+                  
+                  {!list.isDefault && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if(confirm(`Avontuur "${list.name}" verwijderen?`)) {
+                          onDeleteList(list.id);
+                        }
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 hover:text-red-500 rounded-lg transition-all absolute right-5"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
 
             {isCreatingList ? (
               <form onSubmit={handleListSubmit} className="mt-2 px-2">
@@ -159,26 +164,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Labels</h2>
           </div>
           <nav className="px-4 space-y-1">
-            {categories.map((cat) => (
-              <div key={cat.id} className="group flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 rounded-full shadow-sm" style={{ backgroundColor: cat.color }}></div>
-                  <span className="text-sm font-medium text-slate-600 group-hover:text-slate-800">{cat.name}</span>
-                </div>
-                
-                {cat.id !== 'default' && (
+            {categories.map((cat) => {
+              const isActive = activeView.type === 'category' && activeView.id === cat.id;
+              return (
+                <div key={cat.id} className="group relative flex items-center">
                    <button
-                   onClick={(e) => {
-                     e.stopPropagation();
-                     if(confirm(`Tag "${cat.name}" verwijderen?`)) onDeleteCategory(cat.id);
-                   }}
-                   className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-all"
-                 >
-                   <Trash2 size={12} />
-                 </button>
-                )}
-              </div>
-            ))}
+                    onClick={() => {
+                        onSelectCategory(cat.id);
+                        setIsOpen(false);
+                    }}
+                    className={`flex items-center gap-3 w-full px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                        isActive 
+                        ? 'bg-slate-100 text-slate-800 shadow-inner' 
+                        : 'hover:bg-slate-50 text-slate-600'
+                    }`}
+                  >
+                    <div className="w-3 h-3 rounded-full shadow-sm" style={{ backgroundColor: cat.color }}></div>
+                    <span>{cat.name}</span>
+                  </button>
+                  
+                  {cat.id !== 'default' && (
+                     <button
+                     onClick={(e) => {
+                       e.stopPropagation();
+                       if(confirm(`Tag "${cat.name}" verwijderen?`)) onDeleteCategory(cat.id);
+                     }}
+                     className="opacity-0 group-hover:opacity-100 absolute right-2 p-1.5 hover:text-red-400 hover:bg-red-50 rounded-md transition-all"
+                   >
+                     <Trash2 size={12} />
+                   </button>
+                  )}
+                </div>
+              );
+            })}
 
              {isCreatingCategory ? (
               <form onSubmit={handleCategorySubmit} className="mt-2 px-2">
@@ -208,7 +226,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         </div>
         
-        <div className="p-6 border-t border-slate-100 text-xs text-slate-400 flex items-center justify-center gap-2 font-medium">
+        <div className="p-6 border-t border-slate-100 text-xs text-slate-400 flex items-center justify-center gap-2 font-medium shrink-0">
             <Tent size={14} className="text-emerald-500" />
             <span>Geniet van de buitenlucht</span>
         </div>

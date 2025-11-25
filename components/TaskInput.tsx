@@ -1,17 +1,27 @@
-import React, { useState } from 'react';
-import { Send, MapPin, Loader2, ArrowRight, Compass, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Loader2, ArrowRight, Sparkles } from 'lucide-react';
 import { Category } from '../types';
 
 interface TaskInputProps {
   categories: Category[];
+  initialCategoryId?: string;
   onAddTask: (text: string, useAI: boolean, categoryId?: string) => Promise<void>;
   isProcessing: boolean;
 }
 
-export const TaskInput: React.FC<TaskInputProps> = ({ categories, onAddTask, isProcessing }) => {
+export const TaskInput: React.FC<TaskInputProps> = ({ categories, initialCategoryId, onAddTask, isProcessing }) => {
   const [inputValue, setInputValue] = useState('');
   const [mode, setMode] = useState<'simple' | 'ai'>('simple');
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string>(categories[0]?.id || 'default');
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('default');
+
+  // Update selected category when the initialCategoryId prop changes (e.g. switching views)
+  useEffect(() => {
+    if (initialCategoryId) {
+        setSelectedCategoryId(initialCategoryId);
+    } else {
+        setSelectedCategoryId(categories[0]?.id || 'default');
+    }
+  }, [initialCategoryId, categories]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

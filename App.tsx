@@ -5,7 +5,7 @@ import { TaskInput } from './components/TaskInput';
 import { TaskList } from './components/TaskList';
 import { parseNaturalLanguageInput } from './services/geminiService';
 import { Task, TodoList, Priority, Category, TaskStatus } from './types';
-import { Sun, Sunset, Moon } from 'lucide-react';
+import { Sun, Moon } from 'lucide-react';
 
 // Cheerful Default Data
 const DEFAULT_LISTS: TodoList[] = [
@@ -26,6 +26,8 @@ const getRandomColor = () => {
   const colors = ['#f472b6', '#34d399', '#60a5fa', '#fbbf24', '#a78bfa', '#fb7185'];
   return colors[Math.floor(Math.random() * colors.length)];
 };
+
+type ViewMode = { type: 'list', id: string } | { type: 'category', id: string };
 
 const App: React.FC = () => {
   const [lists, setLists] = useState<TodoList[]>(() => {
@@ -52,7 +54,7 @@ const App: React.FC = () => {
     return [];
   });
 
-  const [activeListId, setActiveListId] = useState<string>('basecamp');
+  const [activeView, setActiveView] = useState<ViewMode>({ type: 'list', id: 'basecamp' });
   const [isProcessing, setIsProcessing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -88,14 +90,16 @@ const App: React.FC = () => {
   const handleAddList = (name: string) => {
     const newList: TodoList = { id: uuidv4(), name };
     setLists([...lists, newList]);
-    setActiveListId(newList.id);
+    setActiveView({ type: 'list', id: newList.id });
     showToast(`Nieuwe lijst "${name}" gemaakt! 🚴`);
   };
 
   const handleDeleteList = (id: string) => {
     setLists(lists.filter(l => l.id !== id));
     setTasks(tasks.filter(t => t.listId !== id)); 
-    if (activeListId === id) setActiveListId('basecamp');
+    if (activeView.type === 'list' && activeView.id === id) {
+        setActiveView({ type: 'list', id: 'basecamp' });
+    }
     showToast("Lijst verwijderd");
   };
 
@@ -110,6 +114,9 @@ const App: React.FC = () => {
     if (id === 'default') return;
     setCategories(categories.filter(c => c.id !== id));
     setTasks(tasks.map(t => t.categoryId === id ? { ...t, categoryId: 'default' } : t));
+    if (activeView.type === 'category' && activeView.id === id) {
+        setActiveView({ type: 'list', id: 'basecamp' });
+    }
     showToast("Categorie verwijderd");
   };
 
@@ -124,7 +131,9 @@ const App: React.FC = () => {
         
         const result = await parseNaturalLanguageInput(text, listNames, categoryNames);
         
-        let targetListId = activeListId;
+        // Determine target List ID
+        let targetListId = activeView.type === 'list' ? activeView.id : 'basecamp';
+        
         const matchingList = lists.find(l => l.name.toLowerCase() === result.suggestedListName.toLowerCase());
         
         if (matchingList) {
@@ -133,8 +142,6 @@ const App: React.FC = () => {
           const newList: TodoList = { id: uuidv4(), name: result.suggestedListName };
           setLists(prev => [...prev, newList]);
           targetListId = newList.id;
-        } else {
-           targetListId = 'basecamp';
         }
 
         const newTasks: Task[] = result.tasks.map(t => {
@@ -163,19 +170,34 @@ const App: React.FC = () => {
 
         setTasks(prev => [...prev, ...newTasks]);
         
-        if (targetListId !== activeListId) {
+        // If we created tasks for a list different than what we are seeing, notify better
+        // Note: If view is category, we might see them if category matches, but we don't switch list view.
+        if (activeView.type === 'list' && targetListId !== activeView.id) {
           showToast(`${newTasks.length} taken in "${result.suggestedListName}"`);
-          setActiveListId(targetListId);
+          setActiveView({ type: 'list', id: targetListId });
         } else {
           showToast(`${newTasks.length} taken toegevoegd 🚀`);
         }
 
       } else {
+        // Manual Entry
+        // If viewing a category, use that category ID. List ID defaults to basecamp (or first default list).
+        // If viewing a list, use that list ID. Category defaults to default (or selection).
+        
+        let targetListId = 'basecamp';
+        if (activeView.type === 'list') {
+            targetListId = activeView.id;
+        } else {
+            // Find default list
+            const defaultList = lists.find(l => l.isDefault);
+            if (defaultList) targetListId = defaultList.id;
+        }
+
         const newTask: Task = {
           id: uuidv4(),
           title: text,
           status: 'todo',
-          listId: activeListId,
+          listId: targetListId,
           categoryId: manualCategoryId || 'default',
           priority: Priority.MEDIUM,
           createdAt: Date.now(),
@@ -229,8 +251,20 @@ const App: React.FC = () => {
     }));
   };
 
-  const activeList = lists.find(l => l.id === activeListId) || lists[0];
-  const activeTasks = tasks.filter(t => t.listId === activeListId);
+  // Determine what tasks to show
+  let displayedTasks = tasks;
+  let viewTitle = '';
+  
+  if (activeView.type === 'list') {
+      displayedTasks = tasks.filter(t => t.listId === activeView.id);
+      const currentList = lists.find(l => l.id === activeView.id);
+      viewTitle = currentList ? currentList.name : 'Lijst';
+  } else {
+      displayedTasks = tasks.filter(t => t.categoryId === activeView.id);
+      const currentCategory = categories.find(c => c.id === activeView.id);
+      viewTitle = currentCategory ? `${currentCategory.name}` : 'Categorie';
+  }
+
   const openTaskCount = tasks.filter(t => t.status !== 'done').length;
 
   return (
@@ -238,8 +272,9 @@ const App: React.FC = () => {
       <Sidebar 
         lists={lists} 
         categories={categories}
-        activeListId={activeListId} 
-        onSelectList={setActiveListId}
+        activeView={activeView} 
+        onSelectList={(id) => setActiveView({ type: 'list', id })}
+        onSelectCategory={(id) => setActiveView({ type: 'category', id })}
         onAddList={handleAddList}
         onDeleteList={handleDeleteList}
         onAddCategory={handleAddCategory}
@@ -275,14 +310,15 @@ const App: React.FC = () => {
           <div className="max-w-4xl mx-auto px-6 py-8">
             <TaskInput 
               categories={categories}
+              initialCategoryId={activeView.type === 'category' ? activeView.id : undefined}
               onAddTask={handleAddTask} 
               isProcessing={isProcessing} 
             />
             
             <TaskList 
-              tasks={activeTasks}
+              tasks={displayedTasks}
               categories={categories}
-              title={activeList.name}
+              title={viewTitle}
               onUpdateStatus={handleUpdateStatus}
               onDeleteTask={handleDeleteTask}
               onAddSubtask={handleAddSubtask}
