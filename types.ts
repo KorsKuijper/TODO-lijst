@@ -45,5 +45,12 @@ export interface AIParseResult {
   suggestedListName: string;
 }
 
+export interface AppData {
+  lists: TodoList[];
+  categories: Category[];
+  tasks: Task[];
+  updatedAt: number;
+}
+
 // Icon names map for dynamic rendering
 export type IconName = 'List' | 'Sun' | 'Star' | 'Briefcase' | 'ShoppingBag' | 'Home' | 'Zap';

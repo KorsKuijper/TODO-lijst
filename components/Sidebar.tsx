@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, Map, Compass, X, Tent, Bike } from 'lucide-react';
+import { Plus, Trash2, Map, Compass, X, Tent, Bike, Cloud } from 'lucide-react';
 import { TodoList, Category } from '../types';
 
 interface SidebarProps {
@@ -12,6 +12,8 @@ interface SidebarProps {
   onDeleteList: (id: string) => void;
   onAddCategory: (name: string) => void;
   onDeleteCategory: (id: string) => void;
+  onOpenSync: () => void;
+  isSynced: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -23,7 +25,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onAddList, 
   onDeleteList,
   onAddCategory,
-  onDeleteCategory
+  onDeleteCategory,
+  onOpenSync,
+  isSynced
 }) => {
   const [isCreatingList, setIsCreatingList] = useState(false);
   const [isCreatingCategory, setIsCreatingCategory] = useState(false);
@@ -226,9 +230,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         </div>
         
-        <div className="p-6 border-t border-slate-100 text-xs text-slate-400 flex items-center justify-center gap-2 font-medium shrink-0">
-            <Tent size={14} className="text-emerald-500" />
-            <span>Geniet van de buitenlucht</span>
+        <div className="p-4 border-t border-slate-100 space-y-2">
+           <button 
+             onClick={() => {
+                onOpenSync();
+                setIsOpen(false);
+             }}
+             className={`w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+               isSynced 
+                 ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' 
+                 : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+             }`}
+           >
+              <Cloud size={14} />
+              {isSynced ? 'Sync Actief' : 'Start Sync'}
+           </button>
+
+           <div className="text-[10px] text-slate-300 flex items-center justify-center gap-2 font-medium">
+             <Tent size={12} className="text-emerald-500" />
+             <span>Geniet van de buitenlucht</span>
+           </div>
         </div>
       </div>
       

@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Sidebar } from './components/Sidebar';
 import { TaskInput } from './components/TaskInput';
 import { TaskList } from './components/TaskList';
+import { SyncModal } from './components/SyncModal';
 import { parseNaturalLanguageInput } from './services/geminiService';
-import { Task, TodoList, Priority, Category, TaskStatus } from './types';
+import { loadLocal, saveLocal, getSyncId, setSyncId, clearSyncId, createCloudStore, fetchCloudStore, updateCloudStore } from './services/storageService';
+import { Task, TodoList, Priority, Category, TaskStatus, AppData } from './types';
 import { Sun, Moon } from 'lucide-react';
 
 // Cheerful Default Data
@@ -30,33 +32,83 @@ const getRandomColor = () => {
 type ViewMode = { type: 'list', id: string } | { type: 'category', id: string };
 
 const App: React.FC = () => {
-  const [lists, setLists] = useState<TodoList[]>(() => {
-    const saved = localStorage.getItem('lists');
-    return saved ? JSON.parse(saved) : DEFAULT_LISTS;
-  });
-
-  const [categories, setCategories] = useState<Category[]>(() => {
-    const saved = localStorage.getItem('categories');
-    return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
-  });
-
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    const saved = localStorage.getItem('tasks');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return parsed.map((t: any) => ({
-        ...t,
-        status: t.status ? t.status : (t.isCompleted ? 'done' : 'todo'),
-        categoryId: t.categoryId || 'default',
-        subtasks: t.subtasks || []
-      }));
-    }
-    return [];
-  });
+  // Central State
+  const [data, setData] = useState<AppData>(() => loadLocal(DEFAULT_LISTS, DEFAULT_CATEGORIES));
+  const [syncId, setSyncIdState] = useState<string | null>(getSyncId());
 
   const [activeView, setActiveView] = useState<ViewMode>({ type: 'list', id: 'basecamp' });
   const [isProcessing, setIsProcessing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Destructure for easier usage
+  const { lists, categories, tasks } = data;
+
+  // Save to local storage on change
+  useEffect(() => {
+    saveLocal(data);
+  }, [data]);
+
+  // Sync Polling
+  const POLL_INTERVAL = 5000;
+  const lastPulledRef = useRef<number>(0);
+
+  // Debounced push to cloud
+  useEffect(() => {
+    if (!syncId) return;
+
+    // Only push if our version is newer than what we last pulled/pushed
+    // We can't really know perfectly without a revision ID, but we check if we just pulled
+    if (data.updatedAt <= lastPulledRef.current) return;
+
+    const timeout = setTimeout(async () => {
+      try {
+        setIsSyncing(true);
+        await updateCloudStore(syncId, data);
+        setIsSyncing(false);
+      } catch (e) {
+        console.error("Auto-save failed", e);
+        setIsSyncing(false);
+      }
+    }, 2000);
+
+    return () => clearTimeout(timeout);
+  }, [data, syncId]);
+
+  // Poll for changes
+  useEffect(() => {
+    if (!syncId) return;
+
+    const poll = async () => {
+      try {
+        const cloudData = await fetchCloudStore(syncId);
+        if (cloudData.updatedAt > data.updatedAt) {
+          setData(cloudData);
+          lastPulledRef.current = cloudData.updatedAt;
+          showToast("Data gesynchroniseerd ☁️");
+        }
+      } catch (e) {
+        // Silent fail on poll
+      }
+    };
+
+    poll(); // Initial check
+    const interval = setInterval(poll, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [syncId, data.updatedAt]); // Dependency on updatedAt ensures we check against latest
+
+  // Cross-tab sync
+  useEffect(() => {
+    const handleStorageChange = () => {
+       const newData = loadLocal(DEFAULT_LISTS, DEFAULT_CATEGORIES);
+       if (newData.updatedAt > data.updatedAt) {
+         setData(newData);
+       }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [data.updatedAt]);
 
   // Greeting Logic
   const getGreeting = () => {
@@ -68,35 +120,56 @@ const App: React.FC = () => {
 
   const greeting = getGreeting();
 
-  useEffect(() => {
-    localStorage.setItem('lists', JSON.stringify(lists));
-  }, [lists]);
-
-  useEffect(() => {
-    localStorage.setItem('categories', JSON.stringify(categories));
-  }, [categories]);
-
-  useEffect(() => {
-    localStorage.setItem('tasks', JSON.stringify(tasks));
-  }, [tasks]);
-
   const showToast = (message: string) => {
     setToastMessage(message);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Helper to update state
+  const updateData = (fn: (prev: AppData) => Partial<AppData>) => {
+    setData(prev => ({
+      ...prev,
+      ...fn(prev),
+      updatedAt: Date.now()
+    }));
+  };
+
+  // --- Sync Handlers ---
+  const handleEnableSync = async () => {
+    const id = await createCloudStore(data);
+    setSyncId(id);
+    setSyncIdState(id);
+    showToast("Synchronisatie gestart!");
+  };
+
+  const handleJoinSync = async (id: string) => {
+    const cloudData = await fetchCloudStore(id);
+    setData(cloudData); // Join means we accept the cloud state usually
+    setSyncId(id);
+    setSyncIdState(id);
+    showToast("Gekoppeld met apparaat!");
+  };
+
+  const handleDisconnectSync = () => {
+    clearSyncId();
+    setSyncIdState(null);
+    showToast("Synchronisatie gestopt.");
   };
 
   // --- List Handlers ---
 
   const handleAddList = (name: string) => {
     const newList: TodoList = { id: uuidv4(), name };
-    setLists([...lists, newList]);
+    updateData(prev => ({ lists: [...prev.lists, newList] }));
     setActiveView({ type: 'list', id: newList.id });
     showToast(`Nieuwe lijst "${name}" gemaakt! 🚴`);
   };
 
   const handleDeleteList = (id: string) => {
-    setLists(lists.filter(l => l.id !== id));
-    setTasks(tasks.filter(t => t.listId !== id)); 
+    updateData(prev => ({
+      lists: prev.lists.filter(l => l.id !== id),
+      tasks: prev.tasks.filter(t => t.listId !== id)
+    }));
     if (activeView.type === 'list' && activeView.id === id) {
         setActiveView({ type: 'list', id: 'basecamp' });
     }
@@ -106,14 +179,16 @@ const App: React.FC = () => {
   // --- Category Handlers ---
   const handleAddCategory = (name: string) => {
     const newCat: Category = { id: uuidv4(), name, color: getRandomColor() };
-    setCategories([...categories, newCat]);
+    updateData(prev => ({ categories: [...prev.categories, newCat] }));
     showToast(`Categorie "${name}" toegevoegd ✨`);
   };
 
   const handleDeleteCategory = (id: string) => {
     if (id === 'default') return;
-    setCategories(categories.filter(c => c.id !== id));
-    setTasks(tasks.map(t => t.categoryId === id ? { ...t, categoryId: 'default' } : t));
+    updateData(prev => ({
+      categories: prev.categories.filter(c => c.id !== id),
+      tasks: prev.tasks.map(t => t.categoryId === id ? { ...t, categoryId: 'default' } : t)
+    }));
     if (activeView.type === 'category' && activeView.id === id) {
         setActiveView({ type: 'list', id: 'basecamp' });
     }
@@ -133,6 +208,7 @@ const App: React.FC = () => {
         
         // Determine target List ID
         let targetListId = activeView.type === 'list' ? activeView.id : 'basecamp';
+        let newLists = [...lists];
         
         const matchingList = lists.find(l => l.name.toLowerCase() === result.suggestedListName.toLowerCase());
         
@@ -140,19 +216,20 @@ const App: React.FC = () => {
           targetListId = matchingList.id;
         } else if (result.suggestedListName && result.suggestedListName.toLowerCase() !== 'basecamp') {
           const newList: TodoList = { id: uuidv4(), name: result.suggestedListName };
-          setLists(prev => [...prev, newList]);
+          newLists.push(newList);
           targetListId = newList.id;
         }
 
+        let newCategories = [...categories];
         const newTasks: Task[] = result.tasks.map(t => {
           let catId = 'default';
-          const existingCat = categories.find(c => c.name.toLowerCase() === t.categoryName.toLowerCase());
+          const existingCat = newCategories.find(c => c.name.toLowerCase() === t.categoryName.toLowerCase());
           
           if (existingCat) {
             catId = existingCat.id;
           } else if (t.categoryName) {
             const newCat: Category = { id: uuidv4(), name: t.categoryName, color: getRandomColor() };
-            setCategories(prev => [...prev, newCat]); 
+            newCategories.push(newCat);
             catId = newCat.id;
           }
 
@@ -168,10 +245,13 @@ const App: React.FC = () => {
           };
         });
 
-        setTasks(prev => [...prev, ...newTasks]);
+        // Batch update
+        updateData(prev => ({
+          lists: newLists, // Might include new list from AI
+          categories: newCategories, // Might include new cats
+          tasks: [...prev.tasks, ...newTasks]
+        }));
         
-        // If we created tasks for a list different than what we are seeing, notify better
-        // Note: If view is category, we might see them if category matches, but we don't switch list view.
         if (activeView.type === 'list' && targetListId !== activeView.id) {
           showToast(`${newTasks.length} taken in "${result.suggestedListName}"`);
           setActiveView({ type: 'list', id: targetListId });
@@ -181,14 +261,10 @@ const App: React.FC = () => {
 
       } else {
         // Manual Entry
-        // If viewing a category, use that category ID. List ID defaults to basecamp (or first default list).
-        // If viewing a list, use that list ID. Category defaults to default (or selection).
-        
         let targetListId = 'basecamp';
         if (activeView.type === 'list') {
             targetListId = activeView.id;
         } else {
-            // Find default list
             const defaultList = lists.find(l => l.isDefault);
             if (defaultList) targetListId = defaultList.id;
         }
@@ -203,7 +279,7 @@ const App: React.FC = () => {
           createdAt: Date.now(),
           subtasks: []
         };
-        setTasks(prev => [...prev, newTask]);
+        updateData(prev => ({ tasks: [...prev.tasks, newTask] }));
       }
     } catch (error) {
       console.error(error);
@@ -214,51 +290,64 @@ const App: React.FC = () => {
   };
 
   const handleUpdateStatus = (id: string, status: TaskStatus) => {
-    setTasks(tasks.map(t => t.id === id ? { ...t, status } : t));
+    updateData(prev => ({
+      tasks: prev.tasks.map(t => t.id === id ? { ...t, status } : t)
+    }));
   };
 
   const handleUpdatePriority = (id: string, priority: Priority) => {
-    setTasks(tasks.map(t => t.id === id ? { ...t, priority } : t));
+    updateData(prev => ({
+      tasks: prev.tasks.map(t => t.id === id ? { ...t, priority } : t)
+    }));
   };
 
   const handleMoveTask = (id: string, listId: string) => {
-    setTasks(tasks.map(t => t.id === id ? { ...t, listId } : t));
-    // Optional: show toast
+    updateData(prev => ({
+      tasks: prev.tasks.map(t => t.id === id ? { ...t, listId } : t)
+    }));
     const listName = lists.find(l => l.id === listId)?.name;
     if (listName) showToast(`Verplaatst naar "${listName}"`);
   };
 
   const handleDeleteTask = (id: string) => {
-    setTasks(tasks.filter(t => t.id !== id));
+    updateData(prev => ({
+      tasks: prev.tasks.filter(t => t.id !== id)
+    }));
   };
 
   const handleAddSubtask = (taskId: string, title: string) => {
-    setTasks(tasks.map(t => {
-      if (t.id !== taskId) return t;
-      return {
-        ...t,
-        subtasks: [...t.subtasks, { id: uuidv4(), title, isCompleted: false }]
-      };
+    updateData(prev => ({
+      tasks: prev.tasks.map(t => {
+        if (t.id !== taskId) return t;
+        return {
+          ...t,
+          subtasks: [...t.subtasks, { id: uuidv4(), title, isCompleted: false }]
+        };
+      })
     }));
   };
 
   const handleToggleSubtask = (taskId: string, subtaskId: string) => {
-    setTasks(tasks.map(t => {
-      if (t.id !== taskId) return t;
-      return {
-        ...t,
-        subtasks: t.subtasks.map(st => st.id === subtaskId ? { ...st, isCompleted: !st.isCompleted } : st)
-      };
+    updateData(prev => ({
+      tasks: prev.tasks.map(t => {
+        if (t.id !== taskId) return t;
+        return {
+          ...t,
+          subtasks: t.subtasks.map(st => st.id === subtaskId ? { ...st, isCompleted: !st.isCompleted } : st)
+        };
+      })
     }));
   };
 
   const handleDeleteSubtask = (taskId: string, subtaskId: string) => {
-    setTasks(tasks.map(t => {
-      if (t.id !== taskId) return t;
-      return {
-        ...t,
-        subtasks: t.subtasks.filter(st => st.id !== subtaskId)
-      };
+    updateData(prev => ({
+      tasks: prev.tasks.map(t => {
+        if (t.id !== taskId) return t;
+        return {
+          ...t,
+          subtasks: t.subtasks.filter(st => st.id !== subtaskId)
+        };
+      })
     }));
   };
 
@@ -290,6 +379,8 @@ const App: React.FC = () => {
         onDeleteList={handleDeleteList}
         onAddCategory={handleAddCategory}
         onDeleteCategory={handleDeleteCategory}
+        onOpenSync={() => setIsSyncModalOpen(true)}
+        isSynced={!!syncId}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -309,6 +400,7 @@ const App: React.FC = () => {
                 <h1 className="text-3xl md:text-4xl font-black text-slate-800 tracking-tight drop-shadow-sm flex items-center gap-2">
                   <span className="md:hidden">{greeting.icon}</span>
                   {greeting.text}
+                  {isSyncing && <span className="text-xs bg-white/50 px-2 py-1 rounded text-slate-600 font-normal">Sync...</span>}
                 </h1>
                 <p className="text-slate-600 font-medium text-lg drop-shadow-sm bg-white/60 inline-block px-2 rounded-md backdrop-blur-sm mt-1">
                   Klaar voor <span className="text-amber-600 font-bold">{openTaskCount}</span> avonturen vandaag?
@@ -342,6 +434,15 @@ const App: React.FC = () => {
           </div>
         </div>
       </main>
+
+      <SyncModal 
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        syncId={syncId}
+        onEnableSync={handleEnableSync}
+        onJoinSync={handleJoinSync}
+        onDisconnect={handleDisconnectSync}
+      />
 
       {/* Toast Notification */}
       {toastMessage && (
