@@ -1,41 +1,59 @@
 import React, { useState } from 'react';
-import { Task, Priority, TaskStatus, Category } from '../types';
-import { Trash2, Tag, CheckCircle2, Clock, Circle, Plus, Check, X, Bike, Sun } from 'lucide-react';
+import { Task, Priority, TaskStatus, Category, TodoList } from '../types';
+import { Trash2, Tag, CheckCircle2, Clock, Circle, Plus, Check, X, Bike, Sun, FolderInput, ChevronDown } from 'lucide-react';
 
 interface TaskListProps {
   tasks: Task[];
   categories: Category[];
+  lists: TodoList[];
   title: string;
   onUpdateStatus: (id: string, status: TaskStatus) => void;
+  onUpdatePriority: (id: string, priority: Priority) => void;
+  onMoveTask: (id: string, listId: string) => void;
   onDeleteTask: (id: string) => void;
   onAddSubtask: (taskId: string, title: string) => void;
   onToggleSubtask: (taskId: string, subtaskId: string) => void;
   onDeleteSubtask: (taskId: string, subtaskId: string) => void;
 }
 
-const PriorityBadge: React.FC<{ priority: Priority }> = ({ priority }) => {
+const PriorityBadge: React.FC<{ priority: Priority; onChange: (p: Priority) => void }> = ({ priority, onChange }) => {
   const colors = {
-    [Priority.LOW]: 'bg-slate-100 text-slate-500 border-slate-200',
-    [Priority.MEDIUM]: 'bg-sky-50 text-sky-600 border-sky-100',
-    [Priority.HIGH]: 'bg-rose-50 text-rose-600 border-rose-100',
+    [Priority.LOW]: 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200',
+    [Priority.MEDIUM]: 'bg-sky-50 text-sky-600 border-sky-100 hover:bg-sky-100',
+    [Priority.HIGH]: 'bg-rose-50 text-rose-600 border-rose-100 hover:bg-rose-100',
   };
 
   return (
-    <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border ${colors[priority]}`}>
-      {priority}
-    </span>
+    <div className="relative group/priority">
+        <select
+            value={priority}
+            onChange={(e) => onChange(e.target.value as Priority)}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+        >
+            <option value={Priority.LOW}>{Priority.LOW}</option>
+            <option value={Priority.MEDIUM}>{Priority.MEDIUM}</option>
+            <option value={Priority.HIGH}>{Priority.HIGH}</option>
+        </select>
+        <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border transition-colors cursor-pointer flex items-center gap-1 ${colors[priority]}`}>
+        {priority}
+        <ChevronDown size={8} className="opacity-50" />
+        </span>
+    </div>
   );
 };
 
 const TaskItem: React.FC<{
   task: Task;
   category?: Category;
+  lists: TodoList[];
   onUpdateStatus: (id: string, status: TaskStatus) => void;
+  onUpdatePriority: (id: string, priority: Priority) => void;
+  onMoveTask: (id: string, listId: string) => void;
   onDeleteTask: (id: string) => void;
   onAddSubtask: (taskId: string, title: string) => void;
   onToggleSubtask: (taskId: string, subtaskId: string) => void;
   onDeleteSubtask: (taskId: string, subtaskId: string) => void;
-}> = ({ task, category, onUpdateStatus, onDeleteTask, onAddSubtask, onToggleSubtask, onDeleteSubtask }) => {
+}> = ({ task, category, lists, onUpdateStatus, onUpdatePriority, onMoveTask, onDeleteTask, onAddSubtask, onToggleSubtask, onDeleteSubtask }) => {
   const [newSubtask, setNewSubtask] = useState('');
 
   const handleSubtaskSubmit = (e: React.FormEvent) => {
@@ -90,7 +108,12 @@ const TaskItem: React.FC<{
         </div>
         
         <div className="flex flex-wrap items-center gap-2 mt-2">
-          {task.status !== 'done' && <PriorityBadge priority={task.priority} />}
+          {task.status !== 'done' && (
+             <PriorityBadge 
+                priority={task.priority} 
+                onChange={(p) => onUpdatePriority(task.id, p)}
+             />
+          )}
 
           {task.status === 'in_progress' && (
             <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border bg-amber-100 text-amber-600 border-amber-200">
@@ -111,6 +134,23 @@ const TaskItem: React.FC<{
               <span>{category.name}</span>
             </div>
           )}
+
+           {/* Move to List Selector */}
+           <div className="relative group/move ml-1">
+             <select
+                 value={task.listId}
+                 onChange={(e) => onMoveTask(task.id, e.target.value)}
+                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+             >
+                 {lists.map(list => (
+                     <option key={list.id} value={list.id}>Naar: {list.name}</option>
+                 ))}
+             </select>
+             <button className="text-slate-300 hover:text-slate-500 hover:bg-slate-100 p-0.5 rounded transition-colors flex items-center gap-1" title="Verplaats naar andere lijst">
+                 <FolderInput size={14} />
+             </button>
+           </div>
+
         </div>
 
         {/* Subtasks Section */}
@@ -181,8 +221,11 @@ const TaskItem: React.FC<{
 export const TaskList: React.FC<TaskListProps> = ({ 
   tasks, 
   categories, 
+  lists,
   title, 
   onUpdateStatus, 
+  onUpdatePriority,
+  onMoveTask,
   onDeleteTask,
   onAddSubtask,
   onToggleSubtask,
@@ -241,7 +284,10 @@ export const TaskList: React.FC<TaskListProps> = ({
           key={task.id} 
           task={task} 
           category={getCategory(task.categoryId)}
+          lists={lists}
           onUpdateStatus={onUpdateStatus}
+          onUpdatePriority={onUpdatePriority}
+          onMoveTask={onMoveTask}
           onDeleteTask={onDeleteTask}
           onAddSubtask={onAddSubtask}
           onToggleSubtask={onToggleSubtask}

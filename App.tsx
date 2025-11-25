@@ -217,6 +217,17 @@ const App: React.FC = () => {
     setTasks(tasks.map(t => t.id === id ? { ...t, status } : t));
   };
 
+  const handleUpdatePriority = (id: string, priority: Priority) => {
+    setTasks(tasks.map(t => t.id === id ? { ...t, priority } : t));
+  };
+
+  const handleMoveTask = (id: string, listId: string) => {
+    setTasks(tasks.map(t => t.id === id ? { ...t, listId } : t));
+    // Optional: show toast
+    const listName = lists.find(l => l.id === listId)?.name;
+    if (listName) showToast(`Verplaatst naar "${listName}"`);
+  };
+
   const handleDeleteTask = (id: string) => {
     setTasks(tasks.filter(t => t.id !== id));
   };
@@ -318,8 +329,11 @@ const App: React.FC = () => {
             <TaskList 
               tasks={displayedTasks}
               categories={categories}
+              lists={lists}
               title={viewTitle}
               onUpdateStatus={handleUpdateStatus}
+              onUpdatePriority={handleUpdatePriority}
+              onMoveTask={handleMoveTask}
               onDeleteTask={handleDeleteTask}
               onAddSubtask={handleAddSubtask}
               onToggleSubtask={handleToggleSubtask}
