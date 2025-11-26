@@ -5,9 +5,17 @@ import { TaskInput } from './components/TaskInput';
 import { TaskList } from './components/TaskList';
 import { SyncModal } from './components/SyncModal';
 import { parseNaturalLanguageInput } from './services/geminiService';
-import { loadLocal, saveLocal, getSyncId, setSyncId, clearSyncId, createCloudStore, fetchCloudStore, updateCloudStore } from './services/storageService';
+import { 
+  loadLocal, 
+  saveLocal, 
+  createCloudStore, 
+  fetchCloudStore, 
+  updateCloudStore, 
+  getCloudIdFromUrl, 
+  setCloudIdToUrl 
+} from './services/storageService';
 import { Task, TodoList, Priority, Category, TaskStatus, AppData } from './types';
-import { Sun, Moon } from 'lucide-react';
+import { Sun, Moon, CloudLightning, Loader2 } from 'lucide-react';
 
 // Cheerful Default Data
 const DEFAULT_LISTS: TodoList[] = [
@@ -34,98 +42,87 @@ type ViewMode = { type: 'list', id: string } | { type: 'category', id: string };
 const App: React.FC = () => {
   // Central State
   const [data, setData] = useState<AppData>(() => loadLocal(DEFAULT_LISTS, DEFAULT_CATEGORIES));
-  const [syncId, setSyncIdState] = useState<string | null>(getSyncId());
-
   const [activeView, setActiveView] = useState<ViewMode>({ type: 'list', id: 'basecamp' });
   const [isProcessing, setIsProcessing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  
+  // Sync State
+  const [syncId, setSyncId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoadingCloud, setIsLoadingCloud] = useState(false);
 
   // Destructure for easier usage
   const { lists, categories, tasks } = data;
 
-  // Save to local storage on change
+  // 1. Initialize: Check URL for Sync ID
   useEffect(() => {
+    const urlId = getCloudIdFromUrl();
+    if (urlId) {
+      setSyncId(urlId);
+      setIsLoadingCloud(true);
+      fetchCloudStore(urlId).then(cloudData => {
+        if (cloudData) {
+          setData(cloudData);
+          saveLocal(cloudData); // Cache locally
+          showToast("Cloud data geladen ☁️");
+        } else {
+          showToast("Kon cloud data niet vinden");
+        }
+        setIsLoadingCloud(false);
+      });
+    }
+  }, []);
+
+  // 2. Save Logic: Local + Cloud (Debounced)
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    // Always save local immediately as backup
     saveLocal(data);
-  }, [data]);
 
-  // Sync Polling
-  const POLL_INTERVAL = 5000;
-  const lastPulledRef = useRef<number>(0);
-
-  // Debounced push to cloud
-  useEffect(() => {
-    if (!syncId) return;
-
-    // Only push if our version is newer than what we last pulled/pushed
-    // We can't really know perfectly without a revision ID, but we check if we just pulled
-    if (data.updatedAt <= lastPulledRef.current) return;
-
-    const timeout = setTimeout(async () => {
-      try {
-        setIsSyncing(true);
+    if (syncId && !isLoadingCloud) {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      
+      setIsSyncing(true);
+      saveTimeoutRef.current = setTimeout(async () => {
         await updateCloudStore(syncId, data);
         setIsSyncing(false);
-      } catch (e) {
-        console.error("Auto-save failed", e);
-        setIsSyncing(false);
-      }
-    }, 2000);
+      }, 1500); // 1.5s debounce to prevent rate limiting
+    }
 
-    return () => clearTimeout(timeout);
-  }, [data, syncId]);
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [data, syncId, isLoadingCloud]);
 
-  // Poll for changes
+  // 3. Polling: Keep data fresh from other devices
   useEffect(() => {
     if (!syncId) return;
 
-    const poll = async () => {
-      try {
-        const cloudData = await fetchCloudStore(syncId);
-        if (cloudData.updatedAt > data.updatedAt) {
-          setData(cloudData);
-          lastPulledRef.current = cloudData.updatedAt;
-          showToast("Data gesynchroniseerd ☁️");
-        }
-      } catch (e) {
-        // Silent fail on poll
+    const interval = setInterval(async () => {
+      // Don't pull if we are currently typing/pushing (simple conflict avoidance)
+      if (isSyncing) return; 
+
+      const cloudData = await fetchCloudStore(syncId);
+      if (cloudData && cloudData.updatedAt > data.updatedAt) {
+        // Only update if cloud is strictly newer
+        setData(cloudData);
+        saveLocal(cloudData);
+        console.log("Synced from cloud");
       }
-    };
+    }, 4000); // Check every 4 seconds
 
-    poll(); // Initial check
-    const interval = setInterval(poll, POLL_INTERVAL);
     return () => clearInterval(interval);
-  }, [syncId, data.updatedAt]); // Dependency on updatedAt ensures we check against latest
+  }, [syncId, data.updatedAt, isSyncing]);
 
-  // Cross-tab sync
-  useEffect(() => {
-    const handleStorageChange = () => {
-       const newData = loadLocal(DEFAULT_LISTS, DEFAULT_CATEGORIES);
-       if (newData.updatedAt > data.updatedAt) {
-         setData(newData);
-       }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, [data.updatedAt]);
 
-  // Greeting Logic
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return { text: "Goedemorgen", icon: <Sun className="text-amber-400" size={32} /> };
-    if (hour < 18) return { text: "Goedemiddag", icon: <Sun className="text-orange-400" size={32} /> };
-    return { text: "Goedenavond", icon: <Moon className="text-indigo-400" size={32} /> };
-  };
-
-  const greeting = getGreeting();
-
+  // Helpers
   const showToast = (message: string) => {
     setToastMessage(message);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Helper to update state
   const updateData = (fn: (prev: AppData) => Partial<AppData>) => {
     setData(prev => ({
       ...prev,
@@ -136,28 +133,14 @@ const App: React.FC = () => {
 
   // --- Sync Handlers ---
   const handleEnableSync = async () => {
+    // Create new store with CURRENT data
     const id = await createCloudStore(data);
     setSyncId(id);
-    setSyncIdState(id);
-    showToast("Synchronisatie gestart!");
-  };
-
-  const handleJoinSync = async (id: string) => {
-    const cloudData = await fetchCloudStore(id);
-    setData(cloudData); // Join means we accept the cloud state usually
-    setSyncId(id);
-    setSyncIdState(id);
-    showToast("Gekoppeld met apparaat!");
-  };
-
-  const handleDisconnectSync = () => {
-    clearSyncId();
-    setSyncIdState(null);
-    showToast("Synchronisatie gestopt.");
+    setCloudIdToUrl(id); // Updates URL bar
+    showToast("Online database gemaakt! 🔗");
   };
 
   // --- List Handlers ---
-
   const handleAddList = (name: string) => {
     const newList: TodoList = { id: uuidv4(), name };
     updateData(prev => ({ lists: [...prev.lists, newList] }));
@@ -196,7 +179,6 @@ const App: React.FC = () => {
   };
 
   // --- Task Handlers ---
-
   const handleAddTask = async (text: string, useAI: boolean, manualCategoryId?: string) => {
     setIsProcessing(true);
     try {
@@ -283,7 +265,7 @@ const App: React.FC = () => {
       }
     } catch (error) {
       console.error(error);
-      showToast("Oeps, even geen verbinding.");
+      showToast("Oeps, even geen verbinding met AI.");
     } finally {
       setIsProcessing(false);
     }
@@ -367,6 +349,24 @@ const App: React.FC = () => {
 
   const openTaskCount = tasks.filter(t => t.status !== 'done').length;
 
+  // Greeting Logic
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return { text: "Goedemorgen", icon: <Sun className="text-amber-400" size={32} /> };
+    if (hour < 18) return { text: "Goedemiddag", icon: <Sun className="text-orange-400" size={32} /> };
+    return { text: "Goedenavond", icon: <Moon className="text-indigo-400" size={32} /> };
+  };
+  const greeting = getGreeting();
+
+  if (isLoadingCloud) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
+        <Loader2 size={40} className="text-amber-500 animate-spin" />
+        <p className="text-slate-500 font-medium animate-pulse">Database laden...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen bg-slate-50">
       <Sidebar 
@@ -400,7 +400,7 @@ const App: React.FC = () => {
                 <h1 className="text-3xl md:text-4xl font-black text-slate-800 tracking-tight drop-shadow-sm flex items-center gap-2">
                   <span className="md:hidden">{greeting.icon}</span>
                   {greeting.text}
-                  {isSyncing && <span className="text-xs bg-white/50 px-2 py-1 rounded text-slate-600 font-normal">Sync...</span>}
+                  {isSyncing && <CloudLightning size={20} className="text-amber-500 animate-pulse" />}
                 </h1>
                 <p className="text-slate-600 font-medium text-lg drop-shadow-sm bg-white/60 inline-block px-2 rounded-md backdrop-blur-sm mt-1">
                   Klaar voor <span className="text-amber-600 font-bold">{openTaskCount}</span> avonturen vandaag?
@@ -440,8 +440,6 @@ const App: React.FC = () => {
         onClose={() => setIsSyncModalOpen(false)}
         syncId={syncId}
         onEnableSync={handleEnableSync}
-        onJoinSync={handleJoinSync}
-        onDisconnect={handleDisconnectSync}
       />
 
       {/* Toast Notification */}
