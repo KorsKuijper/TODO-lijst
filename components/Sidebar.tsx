@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, Map, Mountain, Wrench, Menu, X, Cloud, Compass } from 'lucide-react';
+import { Plus, Trash2, Map, Mountain, Wrench, Menu, X, Database, Compass } from 'lucide-react';
 import { List } from '../types';
 
 interface SidebarProps {
@@ -8,8 +8,7 @@ interface SidebarProps {
   onSelectList: (id: string) => void;
   onAddList: (title: string) => void;
   onDeleteList: (id: string) => void;
-  onOpenSync: () => void;
-  isSynced: boolean;
+  isOnline: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -18,8 +17,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectList, 
   onAddList, 
   onDeleteList,
-  onOpenSync,
-  isSynced
+  isOnline
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -136,22 +134,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
         
-        {/* Footer / Sync */}
+        {/* Footer / Status */}
         <div className="p-4 border-t border-slate-800">
-           <button 
-             onClick={() => {
-                onOpenSync();
-                setIsOpen(false);
-             }}
-             className={`w-full flex items-center justify-center gap-2 py-3 px-3 rounded-xl text-xs font-bold transition-all border ${
-               isSynced 
-                 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
-                 : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
-             }`}
-           >
-              <Cloud size={16} />
-              {isSynced ? 'CLOUD ACTIVE' : 'CONNECT CLOUD'}
-           </button>
+           <div className="flex items-center gap-3 px-3 py-2 text-xs font-medium text-slate-500">
+              <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'}`} />
+              {isOnline ? 'Database Connected' : 'Local Mode'}
+           </div>
         </div>
       </div>
       

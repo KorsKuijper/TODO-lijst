@@ -1,23 +1,8 @@
 import { AppData, TodoList, Category } from '../types';
+import { supabase } from './supabaseClient';
 
 const STORAGE_KEY = 'gravel_grinder_data';
-// We use a CORS proxy to allow the client-side app to talk to JsonBlob
-// directly without being blocked by browser security policies on custom domains.
-const PROXY_URL = 'https://corsproxy.io/?';
-const API_BASE = 'https://jsonblob.com/api/jsonBlob';
-
-// Helper to get ID from URL
-export const getCloudIdFromUrl = (): string | null => {
-  const params = new URLSearchParams(window.location.search);
-  return params.get('id');
-};
-
-// Helper to set ID to URL without reloading
-export const setCloudIdToUrl = (id: string) => {
-  const url = new URL(window.location.href);
-  url.searchParams.set('id', id);
-  window.history.pushState({}, '', url.toString());
-};
+const DB_ROW_ID = 1;
 
 export const loadLocal = (defaultLists: TodoList[], defaultCategories: Category[]): AppData => {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -47,65 +32,72 @@ export const saveLocal = (data: AppData) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 };
 
-export const createCloudStore = async (data: AppData): Promise<string> => {
-  // We use the proxy to ensure the POST request isn't blocked by CORS
-  const targetUrl = PROXY_URL + encodeURIComponent(API_BASE);
-  
-  const response = await fetch(targetUrl, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify(data)
-  });
-  
-  if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Cloud creation failed: ${response.status} ${text}`);
-  }
-  
-  // The Location header contains the URL to the new blob
-  // Access-Control-Expose-Headers might be needed, but usually proxies forward standard headers
-  const location = response.headers.get('Location') || response.headers.get('x-jsonblob-location');
-  
-  if (!location) throw new Error('No location header received from storage service');
-  
-  const id = location.split('/').pop();
-  if (!id) throw new Error('Invalid ID extracted');
-  
-  return id;
-};
-
-export const fetchCloudStore = async (id: string): Promise<AppData | null> => {
+export const fetchCloudData = async (): Promise<{ success: boolean, data: AppData | null }> => {
   try {
-    // We use the proxy for fetching as well to be safe
-    const targetUrl = PROXY_URL + encodeURIComponent(`${API_BASE}/${id}`);
+    const { data, error } = await supabase
+      .from('app_state')
+      .select('data')
+      .eq('id', DB_ROW_ID)
+      .single();
+
+    if (error) {
+      // If error is PGRST116, it means row doesn't exist yet (not an error per se, just empty DB)
+      if (error.code === 'PGRST116') {
+         return { success: true, data: null };
+      }
+      console.error("Supabase fetch error:", error);
+      return { success: false, data: null };
+    }
+
+    if (data && data.data && Object.keys(data.data).length > 0) {
+      return { success: true, data: data.data as AppData };
+    }
     
-    const response = await fetch(targetUrl, {
-      headers: { 'Accept': 'application/json' }
-    });
-    
-    if (!response.ok) return null;
-    return await response.json();
+    // Connection successful, but data is empty/null
+    return { success: true, data: null };
   } catch (e) {
     console.error("Error fetching cloud data", e);
-    return null;
+    return { success: false, data: null };
   }
 };
 
-export const updateCloudStore = async (id: string, data: AppData): Promise<boolean> => {
+export const saveToCloud = async (data: AppData): Promise<boolean> => {
   try {
-    const targetUrl = PROXY_URL + encodeURIComponent(`${API_BASE}/${id}`);
-    
-    const response = await fetch(targetUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    return response.ok;
+    const { error } = await supabase
+      .from('app_state')
+      .upsert({ id: DB_ROW_ID, data: data, updated_at: new Date().toISOString() });
+
+    if (error) {
+      console.error("Supabase save error:", error);
+      return false;
+    }
+    return true;
   } catch (e) {
-    console.error("Error updating cloud data", e);
+    console.error("Error saving to cloud", e);
     return false;
   }
+};
+
+export const subscribeToChanges = (onUpdate: (data: AppData) => void) => {
+  const channel = supabase
+    .channel('app_state_changes')
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'app_state',
+        filter: `id=eq.${DB_ROW_ID}`
+      },
+      (payload) => {
+        if (payload.new && payload.new.data) {
+          onUpdate(payload.new.data as AppData);
+        }
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 };

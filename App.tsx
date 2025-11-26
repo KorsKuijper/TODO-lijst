@@ -2,11 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Sidebar } from './components/Sidebar';
 import { TaskRow } from './components/TaskRow';
-import { SyncModal } from './components/SyncModal';
 import { parseNaturalLanguageInput } from './services/geminiService';
 import { 
-  loadLocal, saveLocal, createCloudStore, fetchCloudStore, 
-  updateCloudStore, getCloudIdFromUrl, setCloudIdToUrl 
+  loadLocal, saveLocal, fetchCloudData, saveToCloud, subscribeToChanges
 } from './services/storageService';
 import { Task, List, Priority, AppData, Category } from './types';
 import { Plus, Filter, Download, Mountain, Sparkles, X, Layout, List as ListIcon } from 'lucide-react';
@@ -26,23 +24,9 @@ const DEFAULT_CATEGORIES: Category[] = [
 
 const App: React.FC = () => {
   const [data, setData] = useState<AppData>(() => {
-    const local = loadLocal([], []); // We'll adapt storage service usage
-    // Adapter for old data format if needed, mostly just initializing fresh if empty
-    if (!local.lists || local.lists.length === 0) {
-      return { 
-        lists: DEFAULT_LISTS, 
-        tasks: [], 
-        categories: DEFAULT_CATEGORIES,
-        updatedAt: Date.now() 
-      };
-    }
-    // ensure categories exist if loading from old local storage
-    const categories = (local.categories && local.categories.length > 0) 
-      ? local.categories 
-      : DEFAULT_CATEGORIES;
-
-    // @ts-ignore compatibility cast
-    return { ...local, categories };
+    // Initial load from local storage to be instant
+    const local = loadLocal(DEFAULT_LISTS, DEFAULT_CATEGORIES);
+    return local;
   });
 
   const [view, setView] = useState<'focus' | 'all'>('focus');
@@ -54,38 +38,73 @@ const App: React.FC = () => {
   const [useAI, setUseAI] = useState(false);
 
   // Sync State
-  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
-  const [syncId, setSyncId] = useState<string | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isOnline, setIsOnline] = useState(false);
   const [briefingOpen, setBriefingOpen] = useState(false);
+  
+  // Ref to track if the update comes from remote or local to avoid loops
+  const isRemoteUpdate = useRef(false);
 
-  // --- Initialization & Sync ---
+  // --- Initialization & Realtime ---
   useEffect(() => {
-    const urlId = getCloudIdFromUrl();
-    if (urlId) {
-      setSyncId(urlId);
-      fetchCloudStore(urlId).then(cloudData => {
-        if (cloudData) {
-          setData(cloudData);
-          saveLocal(cloudData);
+    const initData = async () => {
+      // 1. Fetch latest from Supabase
+      const result = await fetchCloudData();
+      
+      if (result.success) {
+        // Connection worked
+        if (result.data) {
+           // We have remote data
+           setIsOnline(true);
+           isRemoteUpdate.current = true;
+           setData(result.data);
+           saveLocal(result.data);
+           setTimeout(() => { isRemoteUpdate.current = false; }, 100);
+        } else {
+           // Connection worked, but DB is empty. Initialize it.
+           const saved = await saveToCloud(data);
+           if (saved) setIsOnline(true);
         }
-      });
-    }
+      } else {
+         // Connection failed
+         setIsOnline(false);
+      }
+    };
+
+    initData();
     checkDailyBriefing();
+
+    // 2. Subscribe to Realtime Changes
+    const unsubscribe = subscribeToChanges((newData) => {
+       // When we receive data from other devices
+       console.log("Received remote update");
+       isRemoteUpdate.current = true;
+       setData(newData);
+       saveLocal(newData);
+       setTimeout(() => { isRemoteUpdate.current = false; }, 100);
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
+  // --- Auto-Save to Cloud ---
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   useEffect(() => {
-    saveLocal(data);
-    if (syncId) {
+    // Only save if this change didn't come from a remote update
+    if (!isRemoteUpdate.current && isOnline) {
+      saveLocal(data);
+      
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      setIsSyncing(true);
+      
       saveTimeoutRef.current = setTimeout(async () => {
-        await updateCloudStore(syncId, data);
-        setIsSyncing(false);
-      }, 1500);
+        await saveToCloud(data);
+      }, 1000); // Debounce saves to 1 second
+    } else if (!isOnline) {
+      // Just local save if offline
+      saveLocal(data);
     }
-  }, [data, syncId]);
+  }, [data, isOnline]);
 
   const checkDailyBriefing = () => {
     const last = localStorage.getItem('lastBriefingDate');
@@ -126,8 +145,7 @@ const App: React.FC = () => {
 
         setData(prev => ({ ...prev, tasks: [...newTasks, ...prev.tasks], updatedAt: Date.now() }));
       } else {
-        // Manual Quick Capture: [Title] [Label] [Date]
-        // Very simple implementation, assumes Title first.
+        // Manual Quick Capture
         const newTask: Task = {
           id: uuidv4(),
           listId: activeListId,
@@ -166,7 +184,6 @@ const App: React.FC = () => {
   };
 
   const handleExport = () => {
-    // Simple CSV Export
     const headers = ['Created At', 'Title', 'Label', 'Priority', 'Deadline', 'Status'];
     const rows = data.tasks.map(t => [
       new Date(t.createdAt).toISOString(),
@@ -191,24 +208,20 @@ const App: React.FC = () => {
 
   // --- Filtering ---
   const filteredTasks = data.tasks.filter(t => {
-    // List filter
     if (view === 'all' && t.listId !== activeListId) return false;
 
-    // Focus View Logic
     if (view === 'focus') {
       if (t.isCompleted) return false;
       if (t.priority === Priority.HIGH) return true;
       if (t.deadline) {
         const d = parseISO(t.deadline);
-        return isPast(d) || isToday(d); // Overdue or Today
+        return isPast(d) || isToday(d);
       }
-      return false; // Hide non-urgent without deadlines in Focus
+      return false;
     }
-
     return true;
   });
 
-  // Sort: High Priority first, then Deadline
   filteredTasks.sort((a, b) => {
     const prioOrder = { [Priority.HIGH]: 3, [Priority.MEDIUM]: 2, [Priority.LOW]: 1 };
     if (prioOrder[a.priority] !== prioOrder[b.priority]) return prioOrder[b.priority] - prioOrder[a.priority];
@@ -227,8 +240,7 @@ const App: React.FC = () => {
         onSelectList={(id) => { setActiveListId(id); setView('all'); }}
         onAddList={(title) => setData(prev => ({ ...prev, lists: [...prev.lists, { id: uuidv4(), title, color: '#64748b', icon_name: 'List' }] }))}
         onDeleteList={(id) => setData(prev => ({ ...prev, lists: prev.lists.filter(l => l.id !== id), tasks: prev.tasks.filter(t => t.listId !== id) }))}
-        onOpenSync={() => setIsSyncModalOpen(true)}
-        isSynced={!!syncId}
+        isOnline={isOnline}
       />
 
       <main className="flex-1 flex flex-col h-full relative overflow-hidden">
@@ -373,17 +385,6 @@ const App: React.FC = () => {
             </div>
          </div>
       )}
-
-      <SyncModal 
-        isOpen={isSyncModalOpen} 
-        onClose={() => setIsSyncModalOpen(false)} 
-        syncId={syncId} 
-        onEnableSync={async () => {
-             const id = await createCloudStore(data);
-             setSyncId(id);
-             setCloudIdToUrl(id);
-        }}
-      />
     </div>
   );
 };
