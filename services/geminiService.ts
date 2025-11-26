@@ -9,7 +9,7 @@ export const parseNaturalLanguageInput = async (
   existingListNames: string[]
 ): Promise<AIParseResult> => {
   // Check for API Key at runtime
-  const apiKey = process.env.API_KEY;
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
   if (!apiKey) {
     console.warn("Gemini API Key not found. Falling back to simple task creation.");
