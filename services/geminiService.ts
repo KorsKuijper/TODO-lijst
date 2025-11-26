@@ -1,12 +1,25 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AIParseResult, Priority } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: import.meta.VITE_GEMINI_API_KEY });
+// Removed global initialization to prevent crash on load
+// const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const parseNaturalLanguageInput = async (
   input: string,
   existingListNames: string[]
 ): Promise<AIParseResult> => {
+  // Check for API Key at runtime
+  const apiKey = process.env.API_KEY;
+
+  if (!apiKey) {
+    console.warn("Gemini API Key not found. Falling back to simple task creation.");
+    return {
+      tasks: [{ title: input, label: "Algemeen", priority: Priority.MEDIUM }],
+      suggestedListName: "Basecamp"
+    };
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const model = "gemini-2.5-flash";
   
   const systemInstruction = `
