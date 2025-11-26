@@ -1,6 +1,9 @@
 import { AppData, TodoList, Category } from '../types';
 
 const STORAGE_KEY = 'gravel_grinder_data';
+// We use a CORS proxy to allow the client-side app to talk to JsonBlob
+// directly without being blocked by browser security policies on custom domains.
+const PROXY_URL = 'https://corsproxy.io/?';
 const API_BASE = 'https://jsonblob.com/api/jsonBlob';
 
 // Helper to get ID from URL
@@ -21,7 +24,6 @@ export const loadLocal = (defaultLists: TodoList[], defaultCategories: Category[
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
-      // Ensure basic structure exists
       return {
         lists: parsed.lists || defaultLists,
         categories: parsed.categories || defaultCategories,
@@ -33,7 +35,6 @@ export const loadLocal = (defaultLists: TodoList[], defaultCategories: Category[
     }
   }
 
-  // Defaults
   return {
     lists: defaultLists,
     categories: defaultCategories,
@@ -47,7 +48,10 @@ export const saveLocal = (data: AppData) => {
 };
 
 export const createCloudStore = async (data: AppData): Promise<string> => {
-  const response = await fetch(API_BASE, {
+  // We use the proxy to ensure the POST request isn't blocked by CORS
+  const targetUrl = PROXY_URL + encodeURIComponent(API_BASE);
+  
+  const response = await fetch(targetUrl, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
@@ -56,10 +60,16 @@ export const createCloudStore = async (data: AppData): Promise<string> => {
     body: JSON.stringify(data)
   });
   
-  if (!response.ok) throw new Error('Cloud creation failed');
+  if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Cloud creation failed: ${response.status} ${text}`);
+  }
   
-  const location = response.headers.get('Location');
-  if (!location) throw new Error('No location header received');
+  // The Location header contains the URL to the new blob
+  // Access-Control-Expose-Headers might be needed, but usually proxies forward standard headers
+  const location = response.headers.get('Location') || response.headers.get('x-jsonblob-location');
+  
+  if (!location) throw new Error('No location header received from storage service');
   
   const id = location.split('/').pop();
   if (!id) throw new Error('Invalid ID extracted');
@@ -69,9 +79,13 @@ export const createCloudStore = async (data: AppData): Promise<string> => {
 
 export const fetchCloudStore = async (id: string): Promise<AppData | null> => {
   try {
-    const response = await fetch(`${API_BASE}/${id}`, {
+    // We use the proxy for fetching as well to be safe
+    const targetUrl = PROXY_URL + encodeURIComponent(`${API_BASE}/${id}`);
+    
+    const response = await fetch(targetUrl, {
       headers: { 'Accept': 'application/json' }
     });
+    
     if (!response.ok) return null;
     return await response.json();
   } catch (e) {
@@ -82,7 +96,9 @@ export const fetchCloudStore = async (id: string): Promise<AppData | null> => {
 
 export const updateCloudStore = async (id: string, data: AppData): Promise<boolean> => {
   try {
-    const response = await fetch(`${API_BASE}/${id}`, {
+    const targetUrl = PROXY_URL + encodeURIComponent(`${API_BASE}/${id}`);
+    
+    const response = await fetch(targetUrl, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
