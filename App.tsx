@@ -1,453 +1,389 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Sidebar } from './components/Sidebar';
-import { TaskInput } from './components/TaskInput';
-import { TaskList } from './components/TaskList';
+import { TaskRow } from './components/TaskRow';
 import { SyncModal } from './components/SyncModal';
 import { parseNaturalLanguageInput } from './services/geminiService';
 import { 
-  loadLocal, 
-  saveLocal, 
-  createCloudStore, 
-  fetchCloudStore, 
-  updateCloudStore, 
-  getCloudIdFromUrl, 
-  setCloudIdToUrl 
+  loadLocal, saveLocal, createCloudStore, fetchCloudStore, 
+  updateCloudStore, getCloudIdFromUrl, setCloudIdToUrl 
 } from './services/storageService';
-import { Task, TodoList, Priority, Category, TaskStatus, AppData } from './types';
-import { Sun, Moon, CloudLightning, Loader2 } from 'lucide-react';
+import { Task, List, Priority, AppData, Category } from './types';
+import { Plus, Filter, Download, Mountain, Sparkles, X, Layout, List as ListIcon } from 'lucide-react';
+import { format, isPast, isToday, parseISO } from 'date-fns';
 
-// Cheerful Default Data
-const DEFAULT_LISTS: TodoList[] = [
-  { id: 'basecamp', name: 'Mijn Basecamp', isDefault: true },
-  { id: 'weekend-sun', name: 'Zonnige Ritjes', isDefault: false },
-  { id: 'dream-trips', name: 'Droomreizen', isDefault: false },
+const DEFAULT_LISTS: List[] = [
+  { id: 'basecamp', title: 'Basecamp', color: '#f97316', icon_name: 'Mountain', isDefault: true },
+  { id: 'expeditions', title: 'Expeditions', color: '#10b981', icon_name: 'Map' },
+  { id: 'maintenance', title: 'Gear Maintenance', color: '#64748b', icon_name: 'Wrench' },
 ];
 
 const DEFAULT_CATEGORIES: Category[] = [
-  { id: 'default', name: 'Algemeen', color: '#94a3b8' }, // slate-400
-  { id: 'tech', name: 'Fiets', color: '#f59e0b' }, // amber-500
-  { id: 'fun', name: 'Fun', color: '#ec4899' }, // pink-500
-  { id: 'food', name: 'Snacks', color: '#f97316' }, // orange-500
-  { id: 'route', name: 'Routes', color: '#10b981' }, // emerald-500
+  { id: 'default', name: 'Algemeen', color: '#94a3b8' },
+  { id: 'urgent', name: 'Urgent', color: '#ef4444' },
+  { id: 'trip', name: 'Trip', color: '#3b82f6' }
 ];
 
-const getRandomColor = () => {
-  const colors = ['#f472b6', '#34d399', '#60a5fa', '#fbbf24', '#a78bfa', '#fb7185'];
-  return colors[Math.floor(Math.random() * colors.length)];
-};
-
-type ViewMode = { type: 'list', id: string } | { type: 'category', id: string };
-
 const App: React.FC = () => {
-  // Central State
-  const [data, setData] = useState<AppData>(() => loadLocal(DEFAULT_LISTS, DEFAULT_CATEGORIES));
-  const [activeView, setActiveView] = useState<ViewMode>({ type: 'list', id: 'basecamp' });
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [data, setData] = useState<AppData>(() => {
+    const local = loadLocal([], []); // We'll adapt storage service usage
+    // Adapter for old data format if needed, mostly just initializing fresh if empty
+    if (!local.lists || local.lists.length === 0) {
+      return { 
+        lists: DEFAULT_LISTS, 
+        tasks: [], 
+        categories: DEFAULT_CATEGORIES,
+        updatedAt: Date.now() 
+      };
+    }
+    // ensure categories exist if loading from old local storage
+    const categories = (local.categories && local.categories.length > 0) 
+      ? local.categories 
+      : DEFAULT_CATEGORIES;
+
+    // @ts-ignore compatibility cast
+    return { ...local, categories };
+  });
+
+  const [view, setView] = useState<'focus' | 'all'>('focus');
+  const [activeListId, setActiveListId] = useState<string>('basecamp');
   
+  // Quick Capture State
+  const [quickInput, setQuickInput] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [useAI, setUseAI] = useState(false);
+
   // Sync State
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [syncId, setSyncId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isLoadingCloud, setIsLoadingCloud] = useState(false);
+  const [briefingOpen, setBriefingOpen] = useState(false);
 
-  // Destructure for easier usage
-  const { lists, categories, tasks } = data;
-
-  // 1. Initialize: Check URL for Sync ID
+  // --- Initialization & Sync ---
   useEffect(() => {
     const urlId = getCloudIdFromUrl();
     if (urlId) {
       setSyncId(urlId);
-      setIsLoadingCloud(true);
       fetchCloudStore(urlId).then(cloudData => {
         if (cloudData) {
           setData(cloudData);
-          saveLocal(cloudData); // Cache locally
-          showToast("Cloud data geladen ☁️");
-        } else {
-          showToast("Kon cloud data niet vinden");
+          saveLocal(cloudData);
         }
-        setIsLoadingCloud(false);
       });
     }
+    checkDailyBriefing();
   }, []);
 
-  // 2. Save Logic: Local + Cloud (Debounced)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
   useEffect(() => {
-    // Always save local immediately as backup
     saveLocal(data);
-
-    if (syncId && !isLoadingCloud) {
+    if (syncId) {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      
       setIsSyncing(true);
       saveTimeoutRef.current = setTimeout(async () => {
         await updateCloudStore(syncId, data);
         setIsSyncing(false);
-      }, 1500); // 1.5s debounce to prevent rate limiting
+      }, 1500);
     }
+  }, [data, syncId]);
 
-    return () => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    };
-  }, [data, syncId, isLoadingCloud]);
-
-  // 3. Polling: Keep data fresh from other devices
-  useEffect(() => {
-    if (!syncId) return;
-
-    const interval = setInterval(async () => {
-      // Don't pull if we are currently typing/pushing (simple conflict avoidance)
-      if (isSyncing) return; 
-
-      const cloudData = await fetchCloudStore(syncId);
-      if (cloudData && cloudData.updatedAt > data.updatedAt) {
-        // Only update if cloud is strictly newer
-        setData(cloudData);
-        saveLocal(cloudData);
-        console.log("Synced from cloud");
-      }
-    }, 4000); // Check every 4 seconds
-
-    return () => clearInterval(interval);
-  }, [syncId, data.updatedAt, isSyncing]);
-
-
-  // Helpers
-  const showToast = (message: string) => {
-    setToastMessage(message);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
-
-  const updateData = (fn: (prev: AppData) => Partial<AppData>) => {
-    setData(prev => ({
-      ...prev,
-      ...fn(prev),
-      updatedAt: Date.now()
-    }));
-  };
-
-  // --- Sync Handlers ---
-  const handleEnableSync = async () => {
-    // Create new store with CURRENT data
-    const id = await createCloudStore(data);
-    setSyncId(id);
-    setCloudIdToUrl(id); // Updates URL bar
-    showToast("Online database gemaakt! 🔗");
-  };
-
-  // --- List Handlers ---
-  const handleAddList = (name: string) => {
-    const newList: TodoList = { id: uuidv4(), name };
-    updateData(prev => ({ lists: [...prev.lists, newList] }));
-    setActiveView({ type: 'list', id: newList.id });
-    showToast(`Nieuwe lijst "${name}" gemaakt! 🚴`);
-  };
-
-  const handleDeleteList = (id: string) => {
-    updateData(prev => ({
-      lists: prev.lists.filter(l => l.id !== id),
-      tasks: prev.tasks.filter(t => t.listId !== id)
-    }));
-    if (activeView.type === 'list' && activeView.id === id) {
-        setActiveView({ type: 'list', id: 'basecamp' });
+  const checkDailyBriefing = () => {
+    const last = localStorage.getItem('lastBriefingDate');
+    const today = new Date().toISOString().split('T')[0];
+    if (last !== today) {
+      setBriefingOpen(true);
+      localStorage.setItem('lastBriefingDate', today);
     }
-    showToast("Lijst verwijderd");
   };
 
-  // --- Category Handlers ---
-  const handleAddCategory = (name: string) => {
-    const newCat: Category = { id: uuidv4(), name, color: getRandomColor() };
-    updateData(prev => ({ categories: [...prev.categories, newCat] }));
-    showToast(`Categorie "${name}" toegevoegd ✨`);
-  };
-
-  const handleDeleteCategory = (id: string) => {
-    if (id === 'default') return;
-    updateData(prev => ({
-      categories: prev.categories.filter(c => c.id !== id),
-      tasks: prev.tasks.map(t => t.categoryId === id ? { ...t, categoryId: 'default' } : t)
-    }));
-    if (activeView.type === 'category' && activeView.id === id) {
-        setActiveView({ type: 'list', id: 'basecamp' });
-    }
-    showToast("Categorie verwijderd");
-  };
-
-  // --- Task Handlers ---
-  const handleAddTask = async (text: string, useAI: boolean, manualCategoryId?: string) => {
+  // --- Logic ---
+  const handleAddTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickInput.trim()) return;
     setIsProcessing(true);
+
     try {
       if (useAI) {
-        const listNames = lists.map(l => l.name);
-        const categoryNames = categories.map(c => c.name);
+        const result = await parseNaturalLanguageInput(quickInput, data.lists.map(l => l.title));
         
-        const result = await parseNaturalLanguageInput(text, listNames, categoryNames);
-        
-        // Determine target List ID
-        let targetListId = activeView.type === 'list' ? activeView.id : 'basecamp';
-        let newLists = [...lists];
-        
-        const matchingList = lists.find(l => l.name.toLowerCase() === result.suggestedListName.toLowerCase());
-        
-        if (matchingList) {
-          targetListId = matchingList.id;
-        } else if (result.suggestedListName && result.suggestedListName.toLowerCase() !== 'basecamp') {
-          const newList: TodoList = { id: uuidv4(), name: result.suggestedListName };
-          newLists.push(newList);
-          targetListId = newList.id;
-        }
+        let targetListId = activeListId;
+        const matchingList = data.lists.find(l => l.title.toLowerCase() === result.suggestedListName.toLowerCase());
+        if (matchingList) targetListId = matchingList.id;
 
-        let newCategories = [...categories];
-        const newTasks: Task[] = result.tasks.map(t => {
-          let catId = 'default';
-          const existingCat = newCategories.find(c => c.name.toLowerCase() === t.categoryName.toLowerCase());
-          
-          if (existingCat) {
-            catId = existingCat.id;
-          } else if (t.categoryName) {
-            const newCat: Category = { id: uuidv4(), name: t.categoryName, color: getRandomColor() };
-            newCategories.push(newCat);
-            catId = newCat.id;
-          }
-
-          return {
-            id: uuidv4(),
-            title: t.title,
-            categoryId: catId,
-            priority: t.priority,
-            status: 'todo',
-            listId: targetListId,
-            createdAt: Date.now(),
-            subtasks: []
-          };
-        });
-
-        // Batch update
-        updateData(prev => ({
-          lists: newLists, // Might include new list from AI
-          categories: newCategories, // Might include new cats
-          tasks: [...prev.tasks, ...newTasks]
+        const newTasks: Task[] = result.tasks.map(t => ({
+          id: uuidv4(),
+          listId: targetListId,
+          title: t.title,
+          label: t.label,
+          priority: t.priority,
+          deadline: t.deadline,
+          isCompleted: false,
+          status: 'todo',
+          subtasks: [],
+          categoryId: 'default',
+          createdAt: Date.now()
         }));
-        
-        if (activeView.type === 'list' && targetListId !== activeView.id) {
-          showToast(`${newTasks.length} taken in "${result.suggestedListName}"`);
-          setActiveView({ type: 'list', id: targetListId });
-        } else {
-          showToast(`${newTasks.length} taken toegevoegd 🚀`);
-        }
 
+        setData(prev => ({ ...prev, tasks: [...newTasks, ...prev.tasks], updatedAt: Date.now() }));
       } else {
-        // Manual Entry
-        let targetListId = 'basecamp';
-        if (activeView.type === 'list') {
-            targetListId = activeView.id;
-        } else {
-            const defaultList = lists.find(l => l.isDefault);
-            if (defaultList) targetListId = defaultList.id;
-        }
-
+        // Manual Quick Capture: [Title] [Label] [Date]
+        // Very simple implementation, assumes Title first.
         const newTask: Task = {
           id: uuidv4(),
-          title: text,
-          status: 'todo',
-          listId: targetListId,
-          categoryId: manualCategoryId || 'default',
+          listId: activeListId,
+          title: quickInput,
           priority: Priority.MEDIUM,
-          createdAt: Date.now(),
-          subtasks: []
+          isCompleted: false,
+          status: 'todo',
+          subtasks: [],
+          categoryId: 'default',
+          createdAt: Date.now()
         };
-        updateData(prev => ({ tasks: [...prev.tasks, newTask] }));
+        setData(prev => ({ ...prev, tasks: [newTask, ...prev.tasks], updatedAt: Date.now() }));
       }
-    } catch (error) {
-      console.error(error);
-      showToast("Oeps, even geen verbinding met AI.");
+      setQuickInput('');
+    } catch (err) {
+      console.error(err);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const handleUpdateStatus = (id: string, status: TaskStatus) => {
-    updateData(prev => ({
-      tasks: prev.tasks.map(t => t.id === id ? { ...t, status } : t)
+  const updateTask = (updatedTask: Task) => {
+    setData(prev => ({
+      ...prev,
+      tasks: prev.tasks.map(t => t.id === updatedTask.id ? updatedTask : t),
+      updatedAt: Date.now()
     }));
   };
 
-  const handleUpdatePriority = (id: string, priority: Priority) => {
-    updateData(prev => ({
-      tasks: prev.tasks.map(t => t.id === id ? { ...t, priority } : t)
+  const deleteTask = (id: string) => {
+    setData(prev => ({
+      ...prev,
+      tasks: prev.tasks.filter(t => t.id !== id),
+      updatedAt: Date.now()
     }));
   };
 
-  const handleMoveTask = (id: string, listId: string) => {
-    updateData(prev => ({
-      tasks: prev.tasks.map(t => t.id === id ? { ...t, listId } : t)
-    }));
-    const listName = lists.find(l => l.id === listId)?.name;
-    if (listName) showToast(`Verplaatst naar "${listName}"`);
+  const handleExport = () => {
+    // Simple CSV Export
+    const headers = ['Created At', 'Title', 'Label', 'Priority', 'Deadline', 'Status'];
+    const rows = data.tasks.map(t => [
+      new Date(t.createdAt).toISOString(),
+      t.title,
+      t.label || '',
+      t.priority,
+      t.deadline || '',
+      t.isCompleted ? 'Done' : 'Pending'
+    ]);
+    
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + [headers.join(','), ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `gravel_log_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
-  const handleDeleteTask = (id: string) => {
-    updateData(prev => ({
-      tasks: prev.tasks.filter(t => t.id !== id)
-    }));
-  };
+  // --- Filtering ---
+  const filteredTasks = data.tasks.filter(t => {
+    // List filter
+    if (view === 'all' && t.listId !== activeListId) return false;
 
-  const handleAddSubtask = (taskId: string, title: string) => {
-    updateData(prev => ({
-      tasks: prev.tasks.map(t => {
-        if (t.id !== taskId) return t;
-        return {
-          ...t,
-          subtasks: [...t.subtasks, { id: uuidv4(), title, isCompleted: false }]
-        };
-      })
-    }));
-  };
+    // Focus View Logic
+    if (view === 'focus') {
+      if (t.isCompleted) return false;
+      if (t.priority === Priority.HIGH) return true;
+      if (t.deadline) {
+        const d = parseISO(t.deadline);
+        return isPast(d) || isToday(d); // Overdue or Today
+      }
+      return false; // Hide non-urgent without deadlines in Focus
+    }
 
-  const handleToggleSubtask = (taskId: string, subtaskId: string) => {
-    updateData(prev => ({
-      tasks: prev.tasks.map(t => {
-        if (t.id !== taskId) return t;
-        return {
-          ...t,
-          subtasks: t.subtasks.map(st => st.id === subtaskId ? { ...st, isCompleted: !st.isCompleted } : st)
-        };
-      })
-    }));
-  };
+    return true;
+  });
 
-  const handleDeleteSubtask = (taskId: string, subtaskId: string) => {
-    updateData(prev => ({
-      tasks: prev.tasks.map(t => {
-        if (t.id !== taskId) return t;
-        return {
-          ...t,
-          subtasks: t.subtasks.filter(st => st.id !== subtaskId)
-        };
-      })
-    }));
-  };
+  // Sort: High Priority first, then Deadline
+  filteredTasks.sort((a, b) => {
+    const prioOrder = { [Priority.HIGH]: 3, [Priority.MEDIUM]: 2, [Priority.LOW]: 1 };
+    if (prioOrder[a.priority] !== prioOrder[b.priority]) return prioOrder[b.priority] - prioOrder[a.priority];
+    if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+    return 0;
+  });
 
-  // Determine what tasks to show
-  let displayedTasks = tasks;
-  let viewTitle = '';
-  
-  if (activeView.type === 'list') {
-      displayedTasks = tasks.filter(t => t.listId === activeView.id);
-      const currentList = lists.find(l => l.id === activeView.id);
-      viewTitle = currentList ? currentList.name : 'Lijst';
-  } else {
-      displayedTasks = tasks.filter(t => t.categoryId === activeView.id);
-      const currentCategory = categories.find(c => c.id === activeView.id);
-      viewTitle = currentCategory ? `${currentCategory.name}` : 'Categorie';
-  }
-
-  const openTaskCount = tasks.filter(t => t.status !== 'done').length;
-
-  // Greeting Logic
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return { text: "Goedemorgen", icon: <Sun className="text-amber-400" size={32} /> };
-    if (hour < 18) return { text: "Goedemiddag", icon: <Sun className="text-orange-400" size={32} /> };
-    return { text: "Goedenavond", icon: <Moon className="text-indigo-400" size={32} /> };
-  };
-  const greeting = getGreeting();
-
-  if (isLoadingCloud) {
-    return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
-        <Loader2 size={40} className="text-amber-500 animate-spin" />
-        <p className="text-slate-500 font-medium animate-pulse">Database laden...</p>
-      </div>
-    );
-  }
+  const overdueCount = data.tasks.filter(t => !t.isCompleted && t.deadline && isPast(parseISO(t.deadline)) && !isToday(parseISO(t.deadline))).length;
+  const todayCount = data.tasks.filter(t => !t.isCompleted && t.deadline && isToday(parseISO(t.deadline))).length;
 
   return (
-    <div className="flex h-screen bg-slate-50">
+    <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
       <Sidebar 
-        lists={lists} 
-        categories={categories}
-        activeView={activeView} 
-        onSelectList={(id) => setActiveView({ type: 'list', id })}
-        onSelectCategory={(id) => setActiveView({ type: 'category', id })}
-        onAddList={handleAddList}
-        onDeleteList={handleDeleteList}
-        onAddCategory={handleAddCategory}
-        onDeleteCategory={handleDeleteCategory}
+        lists={data.lists} 
+        activeListId={activeListId}
+        onSelectList={(id) => { setActiveListId(id); setView('all'); }}
+        onAddList={(title) => setData(prev => ({ ...prev, lists: [...prev.lists, { id: uuidv4(), title, color: '#64748b', icon_name: 'List' }] }))}
+        onDeleteList={(id) => setData(prev => ({ ...prev, lists: prev.lists.filter(l => l.id !== id), tasks: prev.tasks.filter(t => t.listId !== id) }))}
         onOpenSync={() => setIsSyncModalOpen(true)}
         isSynced={!!syncId}
       />
 
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
-        {/* Decorative Background Header */}
-        <div className="h-48 w-full relative shrink-0">
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-50 to-transparent z-10"></div>
-          <img 
-            src="https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=2070&auto=format&fit=crop" 
-            className="w-full h-full object-cover object-center opacity-90"
-            alt="Mountain landscape"
-          />
-          <div className="absolute bottom-4 left-6 md:left-12 z-20 flex items-center gap-4">
-             <div className="bg-white/90 backdrop-blur p-3 rounded-2xl shadow-lg border border-white/50 hidden md:block">
-               {greeting.icon}
-             </div>
-             <div>
-                <h1 className="text-3xl md:text-4xl font-black text-slate-800 tracking-tight drop-shadow-sm flex items-center gap-2">
-                  <span className="md:hidden">{greeting.icon}</span>
-                  {greeting.text}
-                  {isSyncing && <CloudLightning size={20} className="text-amber-500 animate-pulse" />}
-                </h1>
-                <p className="text-slate-600 font-medium text-lg drop-shadow-sm bg-white/60 inline-block px-2 rounded-md backdrop-blur-sm mt-1">
-                  Klaar voor <span className="text-amber-600 font-bold">{openTaskCount}</span> avonturen vandaag?
-                </p>
-             </div>
+      <main className="flex-1 flex flex-col h-full relative overflow-hidden">
+        
+        {/* Header */}
+        <header className="bg-white border-b border-slate-200 sticky top-0 z-10 px-8 py-5 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-4">
+             <h2 className="text-2xl font-bold tracking-tight text-slate-800">
+               {view === 'focus' ? 'Cockpit' : data.lists.find(l => l.id === activeListId)?.title || 'List'}
+             </h2>
+             {view === 'focus' && (
+                <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold uppercase tracking-wide">
+                   Focus Mode
+                </span>
+             )}
           </div>
-        </div>
 
-        <div className="flex-1 overflow-y-auto">
-          <div className="max-w-4xl mx-auto px-6 py-8">
-            <TaskInput 
-              categories={categories}
-              initialCategoryId={activeView.type === 'category' ? activeView.id : undefined}
-              onAddTask={handleAddTask} 
-              isProcessing={isProcessing} 
-            />
-            
-            <TaskList 
-              tasks={displayedTasks}
-              categories={categories}
-              lists={lists}
-              title={viewTitle}
-              onUpdateStatus={handleUpdateStatus}
-              onUpdatePriority={handleUpdatePriority}
-              onMoveTask={handleMoveTask}
-              onDeleteTask={handleDeleteTask}
-              onAddSubtask={handleAddSubtask}
-              onToggleSubtask={handleToggleSubtask}
-              onDeleteSubtask={handleDeleteSubtask}
-            />
+          <div className="flex items-center gap-3">
+             <button 
+               onClick={() => setView(view === 'focus' ? 'all' : 'focus')}
+               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${view === 'focus' ? 'bg-orange-50 text-orange-700 border border-orange-200' : 'bg-white text-slate-600 border border-slate-200'}`}
+             >
+                {view === 'focus' ? <Layout size={18} /> : <ListIcon size={18} />}
+                <span>{view === 'focus' ? 'Dashboard' : 'List View'}</span>
+             </button>
+             <button onClick={handleExport} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100">
+                <Download size={20} />
+             </button>
           </div>
+        </header>
+
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto bg-slate-50/50">
+           <div className="max-w-5xl mx-auto px-8 py-8">
+              
+              {/* Stats Row */}
+              {view === 'focus' && (
+                <div className="grid grid-cols-2 gap-4 mb-8">
+                    <div className="bg-white border border-red-100 p-5 rounded-xl shadow-sm border-l-4 border-l-red-500">
+                        <div className="text-xs font-bold uppercase text-red-600 mb-1">Overdue Tasks</div>
+                        <div className="text-3xl font-black text-slate-800">{overdueCount}</div>
+                    </div>
+                    <div className="bg-white border border-orange-100 p-5 rounded-xl shadow-sm border-l-4 border-l-orange-500">
+                        <div className="text-xs font-bold uppercase text-orange-600 mb-1">Due Today</div>
+                        <div className="text-3xl font-black text-slate-800">{todayCount}</div>
+                    </div>
+                </div>
+              )}
+
+              {/* Quick Capture */}
+              <div className="mb-8 relative z-0">
+                  <div className={`absolute inset-0 bg-gradient-to-r from-orange-400 to-amber-400 rounded-2xl blur opacity-20 transition-opacity ${isProcessing ? 'opacity-50' : ''}`}></div>
+                  <form onSubmit={handleAddTask} className="relative bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden flex flex-col md:flex-row">
+                      <div className="flex-1 relative">
+                          <input 
+                              type="text" 
+                              value={quickInput}
+                              onChange={(e) => setQuickInput(e.target.value)}
+                              placeholder={useAI ? "Describe your plan (e.g., 'Buy sealant for tubeless setup tomorrow')..." : "Quick add task..."}
+                              className="w-full h-16 pl-6 pr-4 text-lg font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none"
+                              disabled={isProcessing}
+                          />
+                      </div>
+                      <div className="flex items-center gap-2 p-2 bg-slate-50 border-t md:border-t-0 md:border-l border-slate-100">
+                          <button 
+                            type="button" 
+                            onClick={() => setUseAI(!useAI)}
+                            className={`p-3 rounded-xl transition-all flex items-center gap-2 text-sm font-bold ${useAI ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:bg-slate-200'}`}
+                          >
+                             <Sparkles size={18} />
+                             {useAI && <span className="hidden md:inline">AI ON</span>}
+                          </button>
+                          <button 
+                             type="submit" 
+                             disabled={!quickInput.trim() || isProcessing}
+                             className="bg-slate-900 text-white p-3 rounded-xl hover:bg-slate-800 disabled:opacity-50 transition-colors"
+                          >
+                             <Plus size={20} />
+                          </button>
+                      </div>
+                  </form>
+              </div>
+
+              {/* Task List */}
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                 {filteredTasks.length === 0 ? (
+                    <div className="p-16 text-center">
+                        <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Mountain className="text-slate-300" />
+                        </div>
+                        <h3 className="text-slate-900 font-bold mb-1">All Clear</h3>
+                        <p className="text-slate-500 text-sm">No tasks found. Time to ride!</p>
+                    </div>
+                 ) : (
+                    <div>
+                        {filteredTasks.map(task => (
+                            <TaskRow 
+                                key={task.id} 
+                                task={task} 
+                                onUpdate={updateTask}
+                                onDelete={deleteTask}
+                            />
+                        ))}
+                    </div>
+                 )}
+              </div>
+           </div>
         </div>
       </main>
 
-      <SyncModal 
-        isOpen={isSyncModalOpen}
-        onClose={() => setIsSyncModalOpen(false)}
-        syncId={syncId}
-        onEnableSync={handleEnableSync}
-      />
+      {/* Daily Briefing Modal */}
+      {briefingOpen && (
+         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-in zoom-in-95">
+                <div className="flex items-center gap-3 mb-6">
+                    <div className="bg-orange-100 p-3 rounded-full">
+                       <Mountain className="text-orange-600 w-6 h-6" />
+                    </div>
+                    <h2 className="text-2xl font-bold text-slate-900">Morning Briefing</h2>
+                </div>
+                
+                <div className="space-y-4 mb-8">
+                    <div className="p-4 bg-red-50 rounded-xl border border-red-100">
+                        <div className="text-red-800 font-bold text-lg mb-1">{overdueCount} Overdue</div>
+                        <p className="text-red-600/80 text-sm">Critical maintenance required.</p>
+                    </div>
+                    <div className="p-4 bg-orange-50 rounded-xl border border-orange-100">
+                        <div className="text-orange-800 font-bold text-lg mb-1">{todayCount} Due Today</div>
+                        <p className="text-orange-600/80 text-sm">Focus on these before your next ride.</p>
+                    </div>
+                    <p className="italic text-slate-500 text-center mt-4">
+                        "It's not the mountain we conquer, but ourselves."
+                    </p>
+                </div>
 
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 bg-slate-800 text-white px-5 py-3 rounded-xl shadow-2xl shadow-amber-500/20 text-sm font-bold tracking-wide animate-bounce-in z-50 flex items-center gap-3 border-l-4 border-amber-400">
-           {toastMessage}
-        </div>
+                <button 
+                  onClick={() => setBriefingOpen(false)}
+                  className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800"
+                >
+                    Let's Go
+                </button>
+            </div>
+         </div>
       )}
+
+      <SyncModal 
+        isOpen={isSyncModalOpen} 
+        onClose={() => setIsSyncModalOpen(false)} 
+        syncId={syncId} 
+        onEnableSync={async () => {
+             const id = await createCloudStore(data);
+             setSyncId(id);
+             setCloudIdToUrl(id);
+        }}
+      />
     </div>
   );
 };

@@ -5,35 +5,29 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const parseNaturalLanguageInput = async (
   input: string,
-  existingListNames: string[],
-  existingCategoryNames: string[]
+  existingListNames: string[]
 ): Promise<AIParseResult> => {
   const model = "gemini-2.5-flash";
   
   const systemInstruction = `
-    Je bent de 'Ride Leader' assistent voor een gravelbike en avonturen app.
-    Je doel is om invoer van fietsers om te zetten in gestructureerde plannen.
+    Je bent de 'Ride Leader' assistent voor de 'Gravel Grinder Adventure Log'.
+    Zet input om in gestructureerde taken.
     
     Context:
-    De gebruiker is een gravelbiker die houdt van natuur, avontuur, bikepacking en techniek.
+    De gebruiker is een gravelbiker en professional.
     
     Regels:
-    1. Analyseer de input en haal er concrete taken uit.
-    2. Bepaal een categorie.
-       - Kies uit bestaande: ${existingCategoryNames.join(', ')}.
-       - Of maak nieuwe, korte categorieën (bijv. "Onderhoud", "Route", "Voeding", "Campings").
-    3. Bepaal prioriteit. 'Hoog' is vaak voor mechanische mankementen of dingen die nodig zijn voor de rit van morgen.
-    4. Suggesteer een lijstnaam.
-       - Kies uit bestaande: ${existingListNames.join(', ')}.
-       - Of verzin iets avontuurlijks (bijv. "Weekend Rit", "Bikepacking Trip", "Winter Training").
-       - Gebruik "Basecamp" als het algemeen is.
+    1. Haal taken uit de input.
+    2. Bepaal een LABEL (kort, bijv. "Klant A", "Onderhoud", "Reis").
+    3. Bepaal PRIORITEIT (Low, Medium, High).
+    4. Bepaal DEADLINE als ISO string (YYYY-MM-DD) indien genoemd (bijv. "morgen", "volgende week vrijdag"). Anders null.
+    5. Suggesteer een Lijst naam (bijv. "Basecamp", "Expedities", "Onderhoud").
     
-    Voorbeeld Input: "Ik moet tubeless sealant kopen, de route naar de Veluwe plotten en regenjas wassen"
-    Verwachte output logica:
-    - Taak 1: Tubeless sealant kopen (Categorie: Onderhoud, Prioriteit: Hoog)
-    - Taak 2: Route Veluwe plotten (Categorie: Route, Prioriteit: Gemiddeld)
-    - Taak 3: Regenjas wassen (Categorie: Kleding, Prioriteit: Laag)
-    - Lijst: Veluwe Adventure (of Basecamp)
+    Voorbeeld Input: "Check remblokken voor de Ardennen rit volgende week vrijdag en bel Jan over project X"
+    Verwachte output:
+    - Taak 1: Check remblokken (Label: Onderhoud, Prio: High, Deadline: [datum volgende week vrijdag])
+    - Taak 2: Bel Jan (Label: Project X, Prio: Medium, Deadline: [vandaag])
+    - Lijst: Basecamp
   `;
 
   try {
@@ -51,21 +45,18 @@ export const parseNaturalLanguageInput = async (
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  title: { type: Type.STRING, description: "De actie" },
-                  categoryName: { type: Type.STRING, description: "De categorie" },
+                  title: { type: Type.STRING },
+                  label: { type: Type.STRING },
                   priority: { 
                     type: Type.STRING, 
-                    enum: [Priority.LOW, Priority.MEDIUM, Priority.HIGH],
-                    description: "Urgentie van de taak" 
-                  }
+                    enum: [Priority.LOW, Priority.MEDIUM, Priority.HIGH] 
+                  },
+                  deadline: { type: Type.STRING, nullable: true }
                 },
-                required: ["title", "categoryName", "priority"]
+                required: ["title", "label", "priority"]
               }
             },
-            suggestedListName: { 
-              type: Type.STRING, 
-              description: "De naam van de lijst." 
-            }
+            suggestedListName: { type: Type.STRING }
           },
           required: ["tasks", "suggestedListName"]
         }
@@ -78,9 +69,8 @@ export const parseNaturalLanguageInput = async (
     return JSON.parse(text) as AIParseResult;
   } catch (error) {
     console.error("Fout bij aanroepen Gemini:", error);
-    // Fallback
     return {
-      tasks: [{ title: input, categoryName: "Algemeen", priority: Priority.MEDIUM }],
+      tasks: [{ title: input, label: "Algemeen", priority: Priority.MEDIUM }],
       suggestedListName: "Basecamp"
     };
   }

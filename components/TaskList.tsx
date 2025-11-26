@@ -143,7 +143,7 @@ const TaskItem: React.FC<{
                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
              >
                  {lists.map(list => (
-                     <option key={list.id} value={list.id}>Naar: {list.name}</option>
+                     <option key={list.id} value={list.id}>Naar: {list.title}</option>
                  ))}
              </select>
              <button className="text-slate-300 hover:text-slate-500 hover:bg-slate-100 p-0.5 rounded transition-colors flex items-center gap-1" title="Verplaats naar andere lijst">

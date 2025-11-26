@@ -1,56 +1,65 @@
 export enum Priority {
-  LOW = 'Laag',
-  MEDIUM = 'Gemiddeld',
-  HIGH = 'Hoog'
+  LOW = 'Low',
+  MEDIUM = 'Medium',
+  HIGH = 'High'
 }
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 
-export interface Category {
-  id: string;
-  name: string;
-  color: string; // Hex code or Tailwind class fragment
-}
-
-export interface SubTask {
+export interface Subtask {
   id: string;
   title: string;
   isCompleted: boolean;
 }
 
-export interface Task {
-  id: string;
-  title: string;
-  status: TaskStatus; // Replaces isCompleted
-  categoryId: string; // Link to Category ID
-  priority: Priority;
-  listId: string;
-  createdAt: number;
-  subtasks: SubTask[];
-}
-
-export interface TodoList {
+export interface Category {
   id: string;
   name: string;
-  icon?: string;
+  color: string;
+}
+
+export interface Task {
+  id: string;
+  listId: string;
+  categoryId: string;
+  title: string;
+  description?: string;
+  priority: Priority;
+  label?: string; // Used for Client/Context
+  deadline?: string; // ISO Date string
+  isCompleted: boolean;
+  status: TaskStatus;
+  subtasks: Subtask[];
+  completedAt?: string;
+  createdAt: number;
+}
+
+export interface List {
+  id: string;
+  title: string;
+  color: string;
+  icon_name: string;
   isDefault?: boolean;
+}
+
+export type TodoList = List;
+
+export interface AppData {
+  lists: List[];
+  tasks: Task[];
+  categories: Category[];
+  updatedAt: number;
 }
 
 export interface AIParseResult {
   tasks: {
     title: string;
-    categoryName: string; // AI suggests the name, we map to ID
+    label: string;
     priority: Priority;
+    deadline?: string;
   }[];
   suggestedListName: string;
 }
 
-export interface AppData {
-  lists: TodoList[];
-  categories: Category[];
-  tasks: Task[];
-  updatedAt: number;
-}
-
 // Icon names map for dynamic rendering
-export type IconName = 'List' | 'Sun' | 'Star' | 'Briefcase' | 'ShoppingBag' | 'Home' | 'Zap';
+export type IconName = 'List' | 'Mountain' | 'Map' | 'Wrench' | 'Zap' | 'Flag';
